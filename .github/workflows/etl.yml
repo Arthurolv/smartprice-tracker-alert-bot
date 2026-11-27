@@ -1,0 +1,80 @@
+name: ETL diário
+
+on:
+  schedule:
+    - cron: "17 12 * * *"
+  workflow_dispatch:
+    inputs:
+      demo:
+        description: "Executar com dados fictícios e simular os alertas"
+        type: boolean
+        default: true
+
+concurrency:
+  group: smartprice-etl
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    if: ${{ inputs.demo || github.ref_name == github.event.repository.default_branch }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.demo && github.ref_name || github.event.repository.default_branch }}
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Instalar dependências
+        run: python -m pip install -r requirements.txt
+
+      - name: Executar demonstração
+        if: ${{ inputs.demo }}
+        run: python -m smartprice --demo
+
+      - name: Coletar preços e publicar alertas
+        id: live
+        if: ${{ !inputs.demo }}
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: python -m smartprice
+
+      - name: Persistir histórico e registro de alertas
+        # Preserva gravações válidas também quando um produto ou envio falha.
+        if: ${{ !cancelled() && (steps.live.outcome == 'success' || steps.live.outcome == 'failure') }}
+        shell: bash
+        run: |
+          if [[ ! -f data/prices.sqlite3 ]]; then
+            exit 0
+          fi
+          git add -f data/prices.sqlite3
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Atualiza histórico de preços"
+          git pull --rebase
+          git push
+
+      - name: Disponibilizar gráficos
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: price-charts
+          path: charts/
+          if-no-files-found: ignore
+
+      - name: Disponibilizar banco de demonstração
+        if: ${{ success() && inputs.demo }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: demo-database
+          path: data/demo.sqlite3

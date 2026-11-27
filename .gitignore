@@ -1,0 +1,10 @@
+# Ambiente local e credenciais
+.env
+.venv/
+__pycache__/
+*.py[cod]
+.local/
+
+# Saídas do pipeline (o workflow versiona somente data/prices.sqlite3)
+data/
+charts/
